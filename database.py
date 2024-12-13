@@ -40,5 +40,13 @@ def get_entries(user_id, start_date=None, end_date=None):
         db_cursor.execute(query, (user_id,))
     return db_cursor.fetchall()
 
+# Удаление записи из базы данных
+def delete_entry_from_db(user_id, date):
+    db_cursor.execute(
+        "DELETE FROM diary WHERE user_id = ? AND date = ?",
+        (user_id, date)
+    )
+    db_conn.commit()
+
 # Инициализация базы данных
 initialize_db()
