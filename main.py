@@ -1,22 +1,26 @@
 import logging
+from dotenv import load_dotenv
+import os
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler
+
 from function import (
     start,
     help_command,
     add_entry,
+    save_entry,
     view_all,
     view_day,
     view_week,
-    view_month
+    view_month,
+    delete_entry
 )
-from dotenv import load_dotenv
-import os
 
 # Настройка логов
 logging.basicConfig(level=logging.INFO)
 
 # Загрузка токена из .env
-load_dotenv()
+load_dotenv("BOT_TOKEN.env")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 def main():
@@ -30,8 +34,10 @@ def main():
     app.add_handler(CommandHandler("view_week", view_week))
     app.add_handler(CommandHandler("view_month", view_month))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_entry))
-    app.add_handler(MessageHandler(filters.PHOTO, add_entry))
+    app.add_handler(CommandHandler("delete",  delete_entry))
+    app.add_handler(CommandHandler("add", add_entry))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_entry))
+    app.add_handler(MessageHandler(filters.PHOTO, save_entry))
 
     # Запуск бота
     app.run_polling()
