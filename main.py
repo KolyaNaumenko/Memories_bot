@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import os
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from telegram.ext import Application, CommandHandler
+from function import add_goal, list_goals, mark_goal, delete_goal, goal_report
 
 from function import (
     start,
@@ -13,7 +14,12 @@ from function import (
     view_day,
     view_week,
     view_month,
-    delete_entry
+    delete_entry,
+    add_goal,
+    list_goals,
+    mark_goal,
+    delete_goal,
+    goal_report
 )
 
 # Настройка логов
@@ -36,9 +42,13 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("delete",  delete_entry))
     app.add_handler(CommandHandler("add", add_entry))
+    app.add_handler(CommandHandler("add_goal", add_goal))
+    app.add_handler(CommandHandler("list_goals", list_goals))
+    app.add_handler(CommandHandler("mark_goal", mark_goal))
+    app.add_handler(CommandHandler("delete_goal", delete_goal))
+    app.add_handler(CommandHandler("goal_report", goal_report))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, save_entry))
     app.add_handler(MessageHandler(filters.PHOTO, save_entry))
-
     # Запуск бота
     app.run_polling()
 
