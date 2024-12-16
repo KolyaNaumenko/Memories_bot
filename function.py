@@ -4,6 +4,12 @@ from datetime import datetime, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes, ConversationHandler
 from database import add_entry_to_db, get_entries,delete_entry_from_db
+from database import add_goal_to_db, get_goals_from_db, update_goal_status_in_db, delete_goal_from_db
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime
+from datetime import timedelta
+import pytz
+
 
 
 # Папка для изображений
@@ -25,7 +31,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📅 /view_day — записи за сегодня\n"
         "🗓️ /view_week — записи за неделю\n"
         "📆 /view_month — записи за месяц\n"
-        "🔍 Введите месяц и год (например, november2024), чтобы увидеть записи за период.\n"
+        "🎯 **Цели и напоминания**:\n"
+        "   • /add_goal — Добавить новую цель с дедлайном.\n"
+        "     Пример: `/add_goal Выучить Python 2024-12-20 18:00`\n"
+        "   • /list_goals — Показать все цели.\n"
+        "   • /mark_goal — Отметить цель как выполненную или проваленную.\n"
+        "     Пример: `/mark_goal 1 completed`\n"
+        "   • /delete_goal — Удалить цель по номеру.\n"
+        "   • /goal_report — Отчет о выполненных и проваленных целях.\n\n"
+        "🔔 Напоминания о целях автоматически отправляются перед дедлайном.\n\n"
         "❓ /help — узнать подробнее о командах.\n"
     )
 
@@ -39,6 +53,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🗓️ /view_week — показать записи за последние 7 дней.\n"
         "📆 /view_month — показать записи за текущий месяц.\n"
         "🔍 Месяц и год (например, *november2024*) — записи за указанный период.\n"
+        "🎯 **Цели и напоминания**:\n"
+        "   • /add_goal — Добавить цель с дедлайном.\n"
+        "     Формат: `/add_goal Цель 2024-12-20 18:00`\n"
+        "   • /list_goals — Показать все цели (в процессе, выполненные и проваленные).\n"
+        "   • /mark_goal — Изменить статус цели на выполненную или проваленную.\n"
+        "     Формат: `/mark_goal <номер цели> completed/failed`\n"
+        "   • /delete_goal — Удалить цель по номеру.\n"
+        "   • /goal_report — Отчет о выполненных и проваленных целях.\n\n"
+        "🔔 **Напоминания**:\n"
+        "   Автоматически отправляются за несколько минут до дедлайна цели.\n\n"
+        "💡 **Примеры использования**:\n"
+        "   • `/add Успешный день!`\n"
+        "   • `/add_goal Прочитать книгу 2024-12-31 20:00`\n"
+        "   • `/mark_goal 1 completed`\n\n"
+        "Если у вас есть вопросы или предложения, смело пишите! 😊"
     )
 
 # Команда /add
@@ -162,6 +191,8 @@ async def delete_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"✅ Запись #{record_number} успешно удалена!")
 
+
+
 # Обработчики просмотра записей
 async def view_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await view_records(update, context, time_filter=None)
@@ -174,3 +205,160 @@ async def view_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def view_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await view_records(update, context, time_filter="month")
+
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+# Добавление новой цели
+async def add_goal(update, context):
+    try:
+        user_id = update.effective_user.id
+        message = update.message.text
+        goal_data = message.replace("/add_goal", "").strip()  # Убираем команду
+
+        # Проверяем, указаны ли цель и дедлайн
+        if not goal_data:
+            await update.message.reply_text(
+                "❌ Пожалуйста, укажите цель. Пример: `/add_goal Прочитать книгу 2024-12-30` или `/add_goal Прочитать книгу` для установки времени на 12:00.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверяем, есть ли в команде указанная дата (дедлайн)
+        try:
+            # Предполагаем, что последний элемент - это дедлайн
+            *goal_parts, possible_deadline = goal_data.rsplit(maxsplit=1)
+            goal_text = " ".join(goal_parts).strip()  # Цель - всё, кроме дедлайна
+
+            # Проверяем, если последний элемент - это дата или дата с временем
+            if len(possible_deadline) == 10:  # Формат YYYY-MM-DD
+                deadline_str = f"{possible_deadline} 12:00"
+            else:
+                deadline_str = possible_deadline  # Формат YYYY-MM-DD HH:MM
+
+            # Преобразуем строку дедлайна в datetime
+            deadline = datetime.strptime(deadline_str, "%Y-%m-%d %H:%M")
+        except (ValueError, IndexError):  # Если дедлайн не указан или указан неверно
+            goal_text = goal_data  # Всё сообщение - цель
+            deadline = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+        # Проверяем, есть ли текст цели
+        if not goal_text:
+            await update.message.reply_text(
+                "❌ Пожалуйста, укажите текст цели. Пример: `/add_goal Прочитать книгу 2024-12-30`.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Сохраняем цель в базу данных
+        add_goal_to_db(user_id, goal_text, deadline)
+
+        # Планируем напоминания
+        await schedule_reminders(context, user_id, goal_text, deadline)
+
+        # Отправляем подтверждение
+        await update.message.reply_text(
+            f"🎯 Цель добавлена: *{goal_text}*\n🕒 Дедлайн: {deadline.strftime('%Y-%m-%d %H:%M')}",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text(
+            "❌ Ошибка! Проверьте формат: `/add_goal Цель YYYY-MM-DD HH:MM` или `/add_goal Цель` для установки времени на 12:00."
+        )
+        print(e)
+
+async def schedule_reminders(context, user_id, goal_text, deadline):
+    job_queue = context.job_queue
+
+    # Расчёт временных точек для трёх напоминаний
+    now = datetime.now()
+    total_seconds = (deadline - now).total_seconds()
+
+    if total_seconds <= 0:
+        return  # Если дедлайн уже прошёл, напоминания не планируются
+
+    reminder_intervals = [total_seconds / 4, total_seconds / 2, (3 * total_seconds) / 4]
+    reminder_times = [now + timedelta(seconds=interval) for interval in reminder_intervals]
+
+    for reminder_time in reminder_times:
+        job_queue.run_once(
+            reminder_callback,
+            when=(reminder_time - now),
+            data={"user_id": user_id, "goal_text": goal_text, "deadline": deadline},
+        )
+
+async def reminder_callback(job):
+    data = job.data
+    user_id = data["user_id"]
+    goal_text = data["goal_text"]
+    deadline = data["deadline"]
+
+    # Отправляем напоминание
+    await job.application.bot.send_message(
+        chat_id=user_id,
+        text=f"🔔 Напоминание!\nЦель: {goal_text}\n🕒 Дедлайн: {deadline.strftime('%Y-%m-%d %H:%M')}"
+    )
+
+# Показать все цели
+async def list_goals(update, context):
+    user_id = update.effective_user.id
+    goals = get_goals_from_db(user_id)
+
+    if not goals:
+        await update.message.reply_text("📋 У вас пока нет целей.")
+        return
+
+    response = "🎯 Ваши цели:\n"
+    for idx, (goal_id, goal_text, deadline, status) in enumerate(goals, start=1):
+        response += f"{idx}. {goal_text} (до {deadline}) — {status.capitalize()}\n"
+    await update.message.reply_text(response)
+
+# Отметить цель как выполненную или проваленную
+async def mark_goal(update, context):
+    if len(context.args) < 2:
+        await update.message.reply_text("❌ Укажите номер цели и статус (completed/failed). Пример: /mark_goal 1 completed")
+        return
+
+    goal_id = int(context.args[0])
+    status = context.args[1]
+
+    if status not in ["completed", "failed"]:
+        await update.message.reply_text("⚠️ Неверный статус. Используйте: completed или failed.")
+        return
+
+    update_goal_status_in_db(goal_id, status)
+    await update.message.reply_text(f"✅ Статус цели #{goal_id} обновлён: {status.capitalize()}")
+
+# Удаление цели
+async def delete_goal(update, context):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("❌ Укажите номер цели для удаления. Например: /delete_goal 1")
+        return
+
+    goal_id = int(context.args[0])
+    delete_goal_from_db(goal_id)
+    await update.message.reply_text(f"✅ Цель #{goal_id} успешно удалена.")
+
+# Отчет о целях
+async def goal_report(update, context):
+    user_id = update.effective_user.id
+    goals = get_goals_from_db(user_id)
+
+    completed = [g for g in goals if g[3] == "completed"]
+    failed = [g for g in goals if g[3] == "failed"]
+
+    response = "📊 Отчет о целях:\n"
+    response += f"✅ Выполнено: {len(completed)}\n"
+    response += f"❌ Провалено: {len(failed)}\n"
+
+    if completed:
+        response += "\n🎉 Выполненные цели:\n"
+        for goal in completed:
+            response += f"- {goal[1]} (до {goal[2]})\n"
+
+    if failed:
+        response += "\n😞 Проваленные цели:\n"
+        for goal in failed:
+            response += f"- {goal[1]} (до {goal[2]})\n"
+
+    await update.message.reply_text(response)
