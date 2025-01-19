@@ -1,6 +1,7 @@
 import sqlite3
 import os
 
+
 # Подключение к базе данных
 DB_FILE = "diary.db"
 db_conn = sqlite3.connect(DB_FILE, check_same_thread=False)

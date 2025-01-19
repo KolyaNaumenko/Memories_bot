@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 import os
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from telegram.ext import Application, CommandHandler
-from function import add_goal, list_goals, mark_goal, delete_goal, goal_report
+
 
 from function import (
     start,
