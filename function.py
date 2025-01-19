@@ -1,22 +1,19 @@
-import os
-from PIL import Image
-from datetime import datetime, timedelta
-from telegram import Update
-from telegram.ext import ContextTypes, ConversationHandler
+
 from database import add_entry_to_db, get_entries,delete_entry_from_db
 from database import add_goal_to_db, get_goals_from_db, update_goal_status_in_db, delete_goal_from_db
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
 from datetime import timedelta
-import pytz
+import re
+import os
+from datetime import datetime
+
+from telegram import Update
+from telegram.ext import ContextTypes, ConversationHandler
 
 
-
-# Папка для изображений
 IMAGE_FOLDER = "images"
 if not os.path.exists(IMAGE_FOLDER):
     os.makedirs(IMAGE_FOLDER)
-
 # Статус для команды /add
 WAITING_FOR_ENTRY = 1
 
@@ -71,19 +68,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # Команда /add
-# Команда /add
 async def add_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✏️ Пожалуйста, отправьте текст или изображение для записи!")
     return WAITING_FOR_ENTRY
 
-# Сохранение записи
+# Модифицированная версия функции save_entry
 async def save_entry(update, context):
     try:
         user_id = update.effective_user.id
         date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         message = update.message
 
-        entry_text = message.text or ""  # Текст сообщения, если он есть
+        entry_text = message.text.strip() if message.text else ""  # Текст сообщения, если он есть
         photos = message.photo  # Все фотографии из сообщения
         image_paths = []  # Список путей к сохранённым изображениям
 
@@ -92,14 +88,18 @@ async def save_entry(update, context):
             image_directory = "images"
             os.makedirs(image_directory, exist_ok=True)
 
-            for photo in photos:
-                # Берём наибольшую версию фотографии
-                file = await context.bot.get_file(photo.file_id)
-                image_path = os.path.join(image_directory, f"{user_id}_{photo.file_id}.jpg")
-                await file.download_to_drive(image_path)
-                image_paths.append(image_path)  # Добавляем путь в список
+            # Выбираем только одну фотографию — наибольшую по качеству
+            # Последний элемент в photos всегда имеет наибольшее качество (больше всего пикселей)
+            largest_photo = photos[-1]  # Эта фотография будет наибольшей по разрешению
+            file = await context.bot.get_file(largest_photo.file_id)
 
-        # Формируем строку из путей к изображениям, разделяя их запятыми
+            # Генерируем безопасное имя файла
+            safe_file_name = f"{user_id}_{re.sub(r'[^a-zA-Z0-9]', '_', largest_photo.file_id)}.jpg"
+            image_path = os.path.join(image_directory, safe_file_name)
+            await file.download_to_drive(image_path)
+            image_paths.append(image_path)  # Добавляем путь в список
+
+        # Формируем строку из путей к изображениям, разделяя их запятыми (если изображения есть)
         image_paths_str = ",".join(image_paths) if image_paths else None
 
         # Сохраняем запись в базу данных
@@ -115,8 +115,9 @@ async def save_entry(update, context):
         await update.message.reply_text(confirmation_message, parse_mode="Markdown")
     except Exception as e:
         await update.message.reply_text("❌ Произошла ошибка при сохранении записи.")
-        print(e)
+        print(f"Ошибка: {e}")
 
+# Форматирование записи для вывода
 def format_entry(date, entry_text, image_paths_str):
     formatted_entry = f"📅 {date}\n"
     if entry_text:
@@ -126,11 +127,11 @@ def format_entry(date, entry_text, image_paths_str):
         formatted_entry += f"🖼️ Изображений: {len(image_paths)}\n"
     return formatted_entry
 
-
 # Отмена команды
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Операция отменена. Вы можете попробовать снова, используя команду /add.")
     return ConversationHandler.END
+
 
 # Функция для вывода записей
 async def view_records(update: Update, context: ContextTypes.DEFAULT_TYPE, time_filter: str = None):
@@ -138,58 +139,61 @@ async def view_records(update: Update, context: ContextTypes.DEFAULT_TYPE, time_
     now = datetime.now()
     start_date, end_date = None, None
 
+    # Определяем временные рамки в зависимости от фильтра
     if time_filter == "day":
-        start_date = now.strftime("%Y-%m-%d")
-        end_date = f"{start_date} 23:59:59"
+        start_date = now.strftime("%Y-%m-%d 00:00:00")
+        end_date = now.strftime("%Y-%m-%d 23:59:59")
     elif time_filter == "week":
-        start_date = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d")
-        end_date = (now + timedelta(days=(6 - now.weekday()))).strftime("%Y-%m-%d") + " 23:59:59"
+        start_date = (now - timedelta(days=now.weekday())).strftime("%Y-%m-%d 00:00:00")
+        end_date = (now + timedelta(days=(6 - now.weekday()))).strftime("%Y-%m-%d 23:59:59")
     elif time_filter == "month":
-        start_date = now.strftime("%Y-%m-01")
+        start_date = now.strftime("%Y-%m-01 00:00:00")
         next_month = now.replace(day=28) + timedelta(days=4)  # Переход на следующий месяц
-        end_date = next_month.replace(day=1).strftime("%Y-%m-%d") + " 23:59:59"
+        end_date = next_month.replace(day=1).strftime("%Y-%m-%d 00:00:00")
 
     # Получаем записи из базы данных
     entries = get_entries(user_id, start_date, end_date)
 
     # Проверяем, есть ли записи
     if not entries:
-        if time_filter == "day":
-            response = "📭 У вас нет записей за сегодня."
-        elif time_filter == "week":
-            response = "📭 У вас нет записей за эту неделю."
-        elif time_filter == "month":
-            response = "📭 У вас нет записей за этот месяц."
-        else:
-            response = "📭 У вас ещё нет записей."
+        time_responses = {
+            "day": "📭 У вас нет записей за сегодня.",
+            "week": "📭 У вас нет записей за эту неделю.",
+            "month": "📭 У вас нет записей за этот месяц.",
+            None: "📭 У вас ещё нет записей.",
+        }
+        response = time_responses[time_filter]
         await update.message.reply_text(response)
         return
 
-    # Формируем ответ
-    if time_filter == "day":
-        response = f"📅 Записи за сегодня ({now.strftime('%Y-%m-%d')}):\n\n"
-    elif time_filter == "week":
-        response = f"📅 Записи за текущую неделю:\n\n"
-    elif time_filter == "month":
-        response = f"📅 Записи за {now.strftime('%B %Y')}:\n\n"
-    else:
-        response = "📔 Все записи:\n\n"
-
+    # Отправляем записи с нумерацией
     for idx, (date, entry_text, image_paths_str) in enumerate(entries, start=1):
-        formatted_entry = format_entry(date, entry_text, image_paths_str)
-        response += f"{idx}. {formatted_entry}\n"
+        # Формируем текст записи
+        entry_message = f"{idx}. 📅 {date}\n"
+        if entry_text:
+            entry_message += f"📝 {entry_text}\n"
 
-    await update.message.reply_text(response)
+        # Проверяем наличие изображений
+        image_paths = image_paths_str.split(",") if image_paths_str else []
+        if image_paths:
+            entry_message += f"🖼️ Изображений: {len(image_paths)}\n"
 
-def format_entry(date, entry_text, image_paths_str):
-    formatted_entry = f"📅 {date}\n"
-    if entry_text:
-        formatted_entry += f"📝 {entry_text}\n"
-    if image_paths_str:
-        image_paths = image_paths_str.split(",")  # Преобразуем строку в список
-        formatted_entry += f"🖼️ Изображений: {len(image_paths)}\n"
-    return formatted_entry
+        # Отправляем текст записи
+        await update.message.reply_text(entry_message)
 
+        # Отправляем изображения, если есть
+        for image_path in image_paths:
+            try:
+                with open(image_path, "rb") as image_file:
+                    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=image_file)
+            except FileNotFoundError:
+                await update.message.reply_text(f"⚠️ Изображение не найдено: {image_path}")
+
+    # Подсказка для удаления
+    await update.message.reply_text(
+        "✅ Все записи за выбранный период были отправлены.\n"
+        "❌ Чтобы удалить запись, используйте команду /delete и укажите номер записи, например: /delete 1"
+    )
 
 async def delete_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
