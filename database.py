@@ -48,10 +48,6 @@ def delete_entry_from_db(user_id, date):
         (user_id, date)
     )
     db_conn.commit()
-
-# Инициализация базы данных
-initialize_db()
-
 # Создание таблицы для целей
 def initialize_goals_table():
     db_cursor.execute('''
